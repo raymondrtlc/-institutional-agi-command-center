@@ -1,0 +1,284 @@
+# Institutional AGI Command Center - Configuration
+
+# API Configuration
+api:
+  # Price Data
+  polygon:
+    enabled: true
+    base_url: "https://api.polygon.io"
+    timeout: 10
+  
+  alphavantage:
+    enabled: true
+    base_url: "https://www.alphavantage.co"
+    timeout: 10
+  
+  finnhub:
+    enabled: true
+    base_url: "https://finnhub.io/api/v1"
+    timeout: 10
+
+  # News
+  newsapi:
+    enabled: true
+    base_url: "https://newsapi.org"
+    timeout: 10
+    sources: ["cnn", "bbc-news", "reuters", "bloomberg", "cnbc", "the-wall-street-journal"]
+  
+  # Economic Calendar
+  tradingeconomics:
+    enabled: true
+    base_url: "https://api.tradingeconomics.com"
+    timeout: 10
+
+# Market Configuration
+market:
+  primary_symbol: "ES"
+  hedge_symbols: ["SPY", "IWM", "DIA", "QQQ"]
+  mag7: ["NVDA", "TSLA", "AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+  
+  # Timeframes to monitor
+  timeframes:
+    - "monthly"
+    - "weekly"
+    - "daily"
+    - "4h"
+    - "1h"
+    - "30min"
+    - "15min"
+    - "5min"
+  
+  # Primary trading timeframe
+  trading_timeframe: "15min"
+  
+  # Extended hours
+  extended_hours: false
+  market_open: "09:30"  # EST
+  market_close: "16:00"  # EST
+
+# Technical Analysis Configuration
+technical_analysis:
+  # Volume Profile
+  volume_profile:
+    enabled: true
+    lookback_periods: 20
+  
+  # 缠论 (Chan Theory)
+  chan_theory:
+    enabled: true
+    min_segments: 3
+    fractal_tolerance: 0.001  # 0.1% tolerance for fractal identification
+  
+  # Wyckoff Analysis
+  wyckoff:
+    enabled: true
+    scheme_phases: ["accumulation", "markup", "distribution", "markdown"]
+  
+  # Candlestick Patterns
+  candlesticks:
+    enabled: true
+    patterns: ["hammer", "inverted_hammer", "engulfing", "doji", "shooting_star", "morning_star", "evening_star"]
+  
+  # Support & Resistance
+  support_resistance:
+    enabled: true
+    lookback_periods: 50
+    proximity_tolerance: 0.5  # points
+
+# Market Intelligence Configuration
+market_intelligence:
+  # Gamma Exposure
+  gamma_exposure:
+    enabled: true
+    refresh_interval: 300  # seconds
+    flip_threshold: 250000000  # $250M
+  
+  # Option Flow
+  option_flow:
+    enabled: true
+    min_notional: 50000  # $50k minimum trade size to track
+    expirations: ["0DTE", "1DTE", "weekly", "monthly"]
+  
+  # News Analysis
+  news:
+    enabled: true
+    sentiment_model: "distilbert-base-uncased-finetuned-sst-2-english"
+    impact_threshold: 0.7  # 70% confidence to flag as impactful
+    sources: ["reuters", "cnbc", "wsj", "cnn", "bloomberg"]
+  
+  # Economic Calendar
+  economic_calendar:
+    enabled: true
+    impact_levels: ["high", "medium", "low"]
+    lookahead_hours: 24
+  
+  # Fear & Greed Index
+  fear_greed:
+    enabled: true
+    refresh_interval: 3600  # seconds
+  
+  # Breadth Analysis
+  breadth:
+    enabled: true
+    advance_decline_ratio: true
+    new_highs_lows: true
+
+# ML/AI Ensemble Configuration
+ml_ensemble:
+  # Model selection
+  models:
+    arima:
+      enabled: true
+      order: [1, 1, 1]
+      seasonal_order: [1, 1, 1, 20]  # 20-period seasonality
+    
+    lstm:
+      enabled: true
+      layers: 2
+      units: 64
+      dropout: 0.2
+      lookback_window: 60  # 60 periods
+      forecast_horizon: 3   # 3 periods ahead (15-min TF = 45-min)
+    
+    bilstm_attention:
+      enabled: true
+      layers: 2
+      units: 64
+      attention_units: 32
+      dropout: 0.2
+      lookback_window: 60
+      forecast_horizon: 3
+    
+    xgboost:
+      enabled: true
+      n_estimators: 200
+      max_depth: 6
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+    
+    tabpfn:
+      enabled: true
+      n_features: 50
+      use_scaling: true
+    
+    dlstm:
+      enabled: true
+      layers: 4
+      units: [128, 64, 32, 16]
+      dropout: 0.2
+      lookback_window: 60
+      forecast_horizon: 3
+  
+  # Ensemble aggregation
+  aggregation_method: "weighted_voting"  # or "kalman_filter", "stacking"
+  model_weights:
+    arima: 0.15
+    lstm: 0.20
+    bilstm_attention: 0.25
+    xgboost: 0.20
+    tabpfn: 0.10
+    dlstm: 0.10
+  
+  # Kalman Filter (if using)
+  kalman_filter:
+    process_noise: 0.001
+    measurement_noise: 0.1
+  
+  # AutoML
+  automl:
+    enabled: false
+    time_limit: 300  # seconds
+    metric: "mean_absolute_error"
+
+# Risk Management Configuration
+risk_management:
+  # Entry/Exit
+  entry_modes: ["breakout", "pullback", "reversal", "confluence"]
+  
+  atr_multiples:
+    stop_loss: 2.0
+    take_profit: 3.0
+  
+  # Position Sizing
+  position_sizing:
+    method: "risk_parity"  # or "kelly_criterion", "fixed"
+    risk_per_trade: 0.02  # 2% of account
+    max_position_size: 0.10  # 10% of account
+  
+  # Squeeze Detection
+  squeeze:
+    enabled: true
+    bollinger_period: 20
+    keltner_atr_period: 10
+    keltner_offset: 2.0
+
+# Visualization Configuration
+visualization:
+  dashboard:
+    enabled: true
+    refresh_interval: 5  # seconds
+    port: 8501
+  
+  charts:
+    style: "plotly"  # or "matplotlib"
+    theme: "dark"
+    candlestick_type: "ohlc"
+  
+  multitf_heatmap:
+    enabled: true
+    timeframes: ["daily", "4h", "1h", "15min", "5min"]
+    signals: ["trend", "momentum", "volume", "structure"]
+  
+  probability_viz:
+    enabled: true
+    show_intervals: true
+    confidence_level: 0.95
+
+# Backtest Configuration
+backtest:
+  enabled: true
+  start_date: "2023-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 100000
+  commission: 0.001  # 0.1%
+  slippage: 0.0005  # 0.05%
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_path: "logs/app.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
+
+# Cache Configuration
+cache:
+  backend: "redis"  # or "memory", "file"
+  redis_url: "redis://localhost:6379/0"
+  ttl_minutes: 15
+  
+# Database Configuration
+database:
+  type: "postgresql"  # or "sqlite", "mongodb"
+  url: "postgresql://user:password@localhost:5432/agi_command_center"
+  pool_size: 10
+  echo: false  # SQL query logging
+
+# Notification Configuration
+notifications:
+  enabled: false
+  channels:
+    email:
+      enabled: false
+      smtp_server: "smtp.gmail.com"
+      smtp_port: 587
+    
+    slack:
+      enabled: false
+      webhook_url: ""
+    
+    telegram:
+      enabled: false
+      bot_token: ""
+      chat_id: ""

@@ -1,5 +1,5 @@
 """
-Central Data Orchestration Engine
+Central Data Orchestration Engine - CORRECTED v1.0.1
 Handles multi-source data ingestion, validation, and coherence checking
 """
 
@@ -47,7 +47,7 @@ class DataEngine:
         self.last_update = None
         self.validation_errors = []
 
-    def ingest_futures_data(self, symbol: str, timeframes: List[str]) -> pd.DataFrame:
+    def ingest_futures_data(self, symbol: str, timeframes: List[str]) -> Dict[str, pd.DataFrame]:
         """
         Ingest OHLCV futures data across multiple timeframes
         
@@ -56,16 +56,37 @@ class DataEngine:
             timeframes: List of timeframes ('1m', '5m', '15m', '1h', '4h', '1d', '1w', '1mo')
         
         Returns:
-            DataFrame with multi-timeframe OHLCV data
+            Dictionary with DataFrames for each timeframe
         """
         logger.info(f"Ingesting futures data for {symbol} across {len(timeframes)} timeframes")
         
-        # Placeholder: In production, this would fetch from Polygon.io or IQFeed
         data = {}
         for tf in timeframes:
-            data[tf] = pd.DataFrame()
+            try:
+                # In production: fetch from Polygon.io, IQFeed, or yfinance
+                df = self._fetch_timeframe_data(symbol, tf)
+                if df is not None and not df.empty:
+                    is_valid, errors = self.validate_data_integrity(df, f"{symbol}-{tf}")
+                    if is_valid:
+                        data[tf] = df
+                    else:
+                        logger.warning(f"Validation failed for {symbol}-{tf}: {errors}")
+                        data[tf] = pd.DataFrame()
+                else:
+                    data[tf] = pd.DataFrame()
+            except Exception as e:
+                logger.error(f"Error ingesting {symbol} {tf}: {e}")
+                data[tf] = pd.DataFrame()
         
         return data
+
+    def _fetch_timeframe_data(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch OHLCV data for a specific timeframe
+        Placeholder for actual API calls
+        """
+        # TODO: Implement real data fetching
+        return None
 
     def ingest_options_data(self, symbol: str, expiration: str) -> Dict:
         """
@@ -97,7 +118,7 @@ class DataEngine:
         Returns:
             List of news articles with sentiment scores
         """
-        logger.info(f"Ingesting news from {len(sources)} sources")
+        logger.info(f"Ingesting news from {len(sources)} sources with keywords {keywords}")
         
         return []
 
@@ -117,7 +138,7 @@ class DataEngine:
 
     def validate_data_integrity(self, data: pd.DataFrame, symbol: str) -> Tuple[bool, List[str]]:
         """
-        Perform comprehensive data validation
+        Perform comprehensive data validation - CORRECTED VERSION
         
         Args:
             data: DataFrame to validate
@@ -128,32 +149,65 @@ class DataEngine:
         """
         errors = []
         
+        # Check if DataFrame is empty
+        if data is None or data.empty:
+            errors.append("DataFrame is None or empty")
+            return False, errors
+        
+        # Check required columns exist
+        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        missing_columns = [col for col in required_columns if col not in data.columns]
+        if missing_columns:
+            errors.append(f"Missing required columns: {missing_columns}")
+            return False, errors
+        
         # Check for NaN values
         nan_count = data.isna().sum().sum()
-        if nan_count > 0:
-            errors.append(f"Found {nan_count} NaN values")
+        if nan_count > len(data) * 0.1:  # Alert if > 10% NaN
+            errors.append(f"Found {nan_count} NaN values ({nan_count/len(data)*100:.1f}%)")
         
-        # Check OHLC ordering: Low <= Open/Close <= High
-        if not (data['Low'] <= data['Open']).all() or not (data['Open'] <= data['High']).all():
-            errors.append("OHLC ordering violated")
+        # Check OHLC ordering with safe access
+        try:
+            invalid_low_open = (data['Low'] > data['Open']).any()
+            invalid_open_high = (data['Open'] > data['High']).any()
+            invalid_low_high = (data['Low'] > data['High']).any()
+            
+            if invalid_low_open or invalid_open_high or invalid_low_high:
+                ohlc_violations = (data['Low'] > data['Open']) | (data['Open'] > data['High']) | (data['Low'] > data['High'])
+                bad_rows = data[ohlc_violations].head(5)
+                errors.append(f"OHLC ordering violated in {ohlc_violations.sum()} rows")
+        except TypeError as e:
+            errors.append(f"OHLC comparison error (type mismatch): {e}")
         
         # Check volume is non-negative
-        if (data['Volume'] < 0).any():
-            errors.append("Negative volume detected")
+        try:
+            if (data['Volume'] < 0).any():
+                bad_rows = data[data['Volume'] < 0].head(5)
+                errors.append(f"Negative volume detected in {(data['Volume'] < 0).sum()} rows")
+        except TypeError:
+            errors.append("Volume column contains non-numeric values")
         
         # Check for duplicate timestamps
         if data.index.duplicated().any():
-            errors.append("Duplicate timestamps found")
+            duplicate_count = data.index.duplicated().sum()
+            errors.append(f"Found {duplicate_count} duplicate timestamps")
+        
+        # Check for zero volume (suspicious)
+        zero_volume_count = (data['Volume'] == 0).sum()
+        if zero_volume_count > len(data) * 0.2:  # Alert if > 20% zero volume
+            errors.append(f"Found {zero_volume_count} zero-volume bars ({zero_volume_count/len(data)*100:.1f}%)")
         
         is_valid = len(errors) == 0
         if not is_valid:
             logger.warning(f"Data validation failed for {symbol}: {errors}")
+        else:
+            logger.info(f"Data validation passed for {symbol} ({len(data)} rows)")
         
         return is_valid, errors
 
     def check_time_series_coherence(self, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, float]:
         """
-        Verify time-series coherence across multiple timeframes
+        Verify time-series coherence across multiple timeframes - CORRECTED VERSION
         Ensures OHLCV data is internally consistent
         
         Args:
@@ -164,13 +218,70 @@ class DataEngine:
         """
         coherence_scores = {}
         
-        # Example: Check if 5m bars aggregate to 15m bars correctly
-        # In production, this would validate higher TF candles
-        # are consistent with aggregated lower TF candles
+        timeframe_order = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo']
         
         for tf, data in data_dict.items():
-            coherence_scores[tf] = 0.95  # Placeholder
+            if data is None or data.empty:
+                coherence_scores[tf] = 0.0
+                logger.warning(f"No data for timeframe {tf}")
+                continue
+            
+            # Check basic structure
+            required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+            if not all(col in data.columns for col in required_cols):
+                coherence_scores[tf] = 0.0
+                continue
+            
+            # Score based on multiple criteria
+            score = 1.0
+            
+            # 1. Check for gaps in timestamps (should be regular)
+            if len(data) > 1:
+                try:
+                    time_diffs = pd.Series(data.index).diff()
+                    mean_diff = time_diffs.mean()
+                    if mean_diff > 0 and time_diffs.std() > 0:
+                        cv = time_diffs.std() / mean_diff
+                        if cv > 0.1:  # Coefficient of variation > 10%
+                            score -= 0.1
+                except:
+                    pass
+            
+            # 2. Check OHLC consistency
+            try:
+                high_low_valid = ((data['High'] >= data['Low']).all() and 
+                                 (data['High'] >= data['Open']).all() and
+                                 (data['High'] >= data['Close']).all())
+                if not high_low_valid:
+                    score -= 0.2
+            except:
+                score -= 0.2
+            
+            # 3. Check for suspicious volume patterns
+            try:
+                zero_vol_ratio = (data['Volume'] == 0).sum() / len(data)
+                if zero_vol_ratio > 0.2:
+                    score -= 0.1
+            except:
+                pass
+            
+            # 4. Check for outliers (>3 std from mean)
+            try:
+                close_returns = data['Close'].pct_change().dropna()
+                if len(close_returns) > 0:
+                    mean_return = close_returns.mean()
+                    std_return = close_returns.std()
+                    if std_return > 0:
+                        outliers = (abs(close_returns - mean_return) > 3 * std_return).sum()
+                        outlier_ratio = outliers / len(close_returns)
+                        if outlier_ratio > 0.05:
+                            score -= 0.15
+            except:
+                pass
+            
+            coherence_scores[tf] = max(0.0, score)
         
+        logger.info(f"Timeframe coherence scores: {coherence_scores}")
         return coherence_scores
 
     def resolve_conflicting_data(self, primary: pd.DataFrame, secondary: pd.DataFrame) -> pd.DataFrame:
@@ -184,12 +295,18 @@ class DataEngine:
         Returns:
             Reconciled DataFrame
         """
+        if primary is None or primary.empty:
+            return secondary
+        if secondary is None or secondary.empty:
+            return primary
+        
         # Use primary source, fill gaps with secondary
         return primary.fillna(secondary)
 
     def apply_kalman_filter(self, data: pd.Series, q: float = 0.005, r: float = 0.12) -> pd.Series:
         """
-        Apply Kalman filter to smooth price series and separate signal from noise
+        Apply Kalman filter to smooth price series - CORRECTED VERSION
+        Separates signal from noise with proper error handling
         
         Args:
             data: Price series
@@ -199,12 +316,26 @@ class DataEngine:
         Returns:
             Smoothed price series
         """
+        # Validate input
+        if data is None or len(data) == 0:
+            logger.error("Kalman filter: Empty data series")
+            return data
+        
+        # Remove NaN values and warn
+        if data.isna().any():
+            logger.warning(f"Kalman filter: Found {data.isna().sum()} NaN values, forward-filling")
+            data = data.fillna(method='ffill').fillna(method='bfill')
+        
+        if not np.isfinite(data.iloc[0]):
+            logger.error("Kalman filter: First value is not finite")
+            return data
+        
         n = len(data)
         estimates = np.zeros(n)
         errors = np.zeros(n)
         
-        # Initial state
-        estimates[0] = data.iloc[0]
+        # Initial state with bounds checking
+        estimates[0] = float(data.iloc[0])
         errors[0] = 1.0
         
         for i in range(1, n):
@@ -212,9 +343,28 @@ class DataEngine:
             predicted_estimate = estimates[i - 1]
             predicted_error = errors[i - 1] + q
             
+            # Ensure error stays positive (safeguard)
+            predicted_error = max(predicted_error, 1e-8)
+            
+            # Guard against NaN in measurement
+            measurement = float(data.iloc[i])
+            if not np.isfinite(measurement):
+                estimates[i] = predicted_estimate  # Use prediction if measurement is bad
+                errors[i] = predicted_error
+                continue
+            
             # Update step
-            kalman_gain = predicted_error / (predicted_error + r)
-            estimates[i] = predicted_estimate + kalman_gain * (data.iloc[i] - predicted_estimate)
+            denominator = predicted_error + r
+            if denominator <= 0:
+                logger.warning(f"Kalman filter: Denominator <= 0 at step {i}")
+                kalman_gain = 0.5  # Default to 50/50 weighting
+            else:
+                kalman_gain = predicted_error / denominator
+            
+            # Ensure Kalman gain is in valid range [0, 1]
+            kalman_gain = np.clip(kalman_gain, 0, 1)
+            
+            estimates[i] = predicted_estimate + kalman_gain * (measurement - predicted_estimate)
             errors[i] = (1 - kalman_gain) * predicted_error
         
         return pd.Series(estimates, index=data.index)

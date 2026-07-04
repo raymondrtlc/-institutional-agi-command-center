@@ -1,14 +1,15 @@
 """
-Real-Time Market Feed Manager
+Real-Time Market Feed Manager - CORRECTED v1.0.1
 Handles WebSocket connections, data streams, and tick processing
 """
 
 import logging
 import asyncio
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,14 @@ class FeedManager:
     4. Handles connection failures and reconnection
     """
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, max_ticks_per_symbol: int = 10000):
         self.config = config
         self.ticks: Dict[str, List[Tick]] = {}
         self.bars: Dict[str, List[OHLCV]] = {}
         self.callbacks: Dict[str, List[Callable]] = {}
         self.order_book: Dict[str, Dict] = {}
         self.is_connected = False
+        self.max_ticks_per_symbol = max_ticks_per_symbol
 
     async def connect(self, symbols: List[str]):
         """
@@ -85,7 +87,7 @@ class FeedManager:
 
     def process_tick(self, tick: Tick):
         """
-        Process incoming tick
+        Process incoming tick with memory management - CORRECTED VERSION
         
         Args:
             tick: Market tick data
@@ -95,39 +97,61 @@ class FeedManager:
         
         self.ticks[tick.symbol].append(tick)
         
-        # Trigger callbacks
+        # Keep only the last N ticks (prevent memory leak)
+        if len(self.ticks[tick.symbol]) > self.max_ticks_per_symbol:
+            self.ticks[tick.symbol] = self.ticks[tick.symbol][-self.max_ticks_per_symbol:]
+        
+        # Trigger callbacks with error handling
         if 'tick' in self.callbacks:
             for callback in self.callbacks['tick']:
-                callback(tick)
+                try:
+                    callback(tick)
+                except Exception as e:
+                    logger.error(f"Callback error: {e}")
 
-    def aggregate_to_bar(self, symbol: str, timeframe: str) -> OHLCV:
+    def aggregate_to_bar(self, symbol: str, timeframe: str) -> Optional[OHLCV]:
         """
-        Aggregate ticks into OHLCV bar
+        Aggregate ticks into OHLCV bar - CORRECTED VERSION
         
         Args:
             symbol: Symbol to aggregate
             timeframe: Timeframe ('1m', '5m', '15m', etc.)
         
         Returns:
-            OHLCV bar
+            OHLCV bar or None if invalid data
         """
         if symbol not in self.ticks or len(self.ticks[symbol]) == 0:
+            logger.debug(f"No ticks available for {symbol}")
             return None
         
         ticks = self.ticks[symbol]
-        prices = [t.price for t in ticks]
-        volumes = [t.volume for t in ticks]
         
-        bar = OHLCV(
-            open=prices[0],
-            high=max(prices),
-            low=min(prices),
-            close=prices[-1],
-            volume=sum(volumes),
-            timestamp=ticks[-1].timestamp
-        )
+        # Validate tick data
+        if not all(hasattr(t, 'price') and hasattr(t, 'volume') for t in ticks):
+            logger.error(f"Invalid tick structure for {symbol}")
+            return None
         
-        return bar
+        # Filter valid prices and volumes
+        prices = [t.price for t in ticks if np.isfinite(t.price)]
+        volumes = [t.volume for t in ticks if t.volume >= 0]
+        
+        if not prices or not volumes:
+            logger.warning(f"No valid price/volume data for {symbol}")
+            return None
+        
+        try:
+            bar = OHLCV(
+                open=float(prices[0]),
+                high=float(max(prices)),
+                low=float(min(prices)),
+                close=float(prices[-1]),
+                volume=int(sum(volumes)),
+                timestamp=ticks[-1].timestamp
+            )
+            return bar
+        except (ValueError, TypeError) as e:
+            logger.error(f"Failed to create bar for {symbol}: {e}")
+            return None
 
     def update_order_book(self, symbol: str, bids: List[tuple], asks: List[tuple]):
         """
@@ -138,33 +162,52 @@ class FeedManager:
             bids: List of (price, size) tuples
             asks: List of (price, size) tuples
         """
+        if not bids or not asks:
+            logger.warning(f"Empty bids or asks for {symbol}")
+            return
+        
         self.order_book[symbol] = {
             'bids': bids,
             'asks': asks,
             'timestamp': datetime.now()
         }
 
-    def get_bid_ask_spread(self, symbol: str) -> float:
+    def get_bid_ask_spread(self, symbol: str) -> Optional[float]:
         """
-        Get current bid-ask spread
+        Get current bid-ask spread - CORRECTED VERSION
         
         Args:
             symbol: Symbol
         
         Returns:
-            Bid-ask spread in basis points
+            Bid-ask spread in basis points or None
         """
         if symbol not in self.order_book:
             return None
         
         book = self.order_book[symbol]
-        if len(book['bids']) > 0 and len(book['asks']) > 0:
-            bid = book['bids'][0][0]
-            ask = book['asks'][0][0]
-            spread_bps = (ask - bid) / bid * 10000
-            return spread_bps
+        if len(book['bids']) == 0 or len(book['asks']) == 0:
+            return None
         
-        return None
+        bid = float(book['bids'][0][0])
+        ask = float(book['asks'][0][0])
+        
+        # Validate bid < ask and both are positive
+        if bid <= 0 or ask <= 0:
+            logger.warning(f"Invalid bid/ask for {symbol}: bid={bid}, ask={ask}")
+            return None
+        
+        if bid >= ask:
+            logger.warning(f"Inverted bid-ask for {symbol}: bid={bid}, ask={ask}")
+            return None
+        
+        spread_bps = (ask - bid) / bid * 10000
+        
+        # Sanity check: spread should be reasonable (typically < 1000 bps = 10%)
+        if spread_bps > 1000:
+            logger.warning(f"Unusual spread for {symbol}: {spread_bps} bps")
+        
+        return spread_bps
 
     def get_market_depth(self, symbol: str, levels: int = 5) -> Dict:
         """
@@ -186,7 +229,7 @@ class FeedManager:
             'asks': book['asks'][:levels]
         }
 
-    def get_latest_tick(self, symbol: str) -> Tick:
+    def get_latest_tick(self, symbol: str) -> Optional[Tick]:
         """
         Get latest tick for symbol
         
@@ -194,7 +237,7 @@ class FeedManager:
             symbol: Symbol
         
         Returns:
-            Latest Tick object
+            Latest Tick object or None
         """
         if symbol in self.ticks and len(self.ticks[symbol]) > 0:
             return self.ticks[symbol][-1]
@@ -211,15 +254,22 @@ class FeedManager:
         Returns:
             DataFrame with recent ticks
         """
-        if symbol not in self.ticks:
+        if symbol not in self.ticks or len(self.ticks[symbol]) == 0:
             return pd.DataFrame()
         
         ticks = self.ticks[symbol][-lookback:]
-        data = {
-            'timestamp': [t.timestamp for t in ticks],
-            'price': [t.price for t in ticks],
-            'volume': [t.volume for t in ticks],
-            'bid': [t.bid for t in ticks],
-            'ask': [t.ask for t in ticks]
-        }
-        return pd.DataFrame(data)
+        if not ticks:
+            return pd.DataFrame()
+        
+        try:
+            data = {
+                'timestamp': [t.timestamp for t in ticks],
+                'price': [t.price for t in ticks],
+                'volume': [t.volume for t in ticks],
+                'bid': [t.bid for t in ticks],
+                'ask': [t.ask for t in ticks]
+            }
+            return pd.DataFrame(data)
+        except Exception as e:
+            logger.error(f"Error creating tick history DataFrame: {e}")
+            return pd.DataFrame()

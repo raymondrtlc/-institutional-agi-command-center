@@ -1,5 +1,5 @@
 """
-Time-Series Data Cache Manager
+Time-Series Data Cache Manager - CORRECTED v1.0.1
 Handles efficient storage and retrieval of historical data
 """
 
@@ -7,7 +7,10 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import pandas as pd
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
 import json
 
 logger = logging.getLogger(__name__)
@@ -32,16 +35,21 @@ class CacheManager:
         self.backend = backend
         self.memory_cache: Dict[str, Any] = {}
         self.ttl_map: Dict[str, datetime] = {}  # Track expiration times
+        self.redis_client = None
         
         if backend == 'redis' and redis_url:
-            try:
-                self.redis_client = redis.from_url(redis_url)
-                self.redis_client.ping()
-                logger.info("Connected to Redis cache")
-            except Exception as e:
-                logger.warning(f"Redis connection failed: {e}. Falling back to memory cache.")
+            if redis is None:
+                logger.warning("Redis module not installed, falling back to memory cache")
                 self.backend = 'memory'
-                self.redis_client = None
+            else:
+                try:
+                    self.redis_client = redis.from_url(redis_url)
+                    self.redis_client.ping()
+                    logger.info("Connected to Redis cache")
+                except Exception as e:
+                    logger.warning(f"Redis connection failed: {e}. Falling back to memory cache.")
+                    self.backend = 'memory'
+                    self.redis_client = None
         else:
             self.redis_client = None
 
@@ -54,6 +62,10 @@ class CacheManager:
             value: Value to cache (will be JSON serialized if dict/list)
             ttl_minutes: Time to live in minutes
         """
+        if not key:
+            logger.warning("Cannot cache with empty key")
+            return
+        
         expiration = datetime.now() + timedelta(minutes=ttl_minutes)
         
         if self.backend == 'memory':
@@ -65,11 +77,11 @@ class CacheManager:
                     value = json.dumps(value)
                 self.redis_client.setex(key, ttl_minutes * 60, value)
             except Exception as e:
-                logger.error(f"Redis set failed: {e}")
+                logger.error(f"Redis set failed for key {key}: {e}")
 
     def get(self, key: str) -> Optional[Any]:
         """
-        Get cache value
+        Get cache value with proper error handling - CORRECTED VERSION
         
         Args:
             key: Cache key
@@ -77,25 +89,43 @@ class CacheManager:
         Returns:
             Cached value or None if expired/not found
         """
+        if not key:
+            return None
+        
         if self.backend == 'memory':
             if key in self.ttl_map and datetime.now() > self.ttl_map[key]:
-                # Expired
-                del self.memory_cache[key]
-                del self.ttl_map[key]
+                # Expired - clean up
+                try:
+                    del self.memory_cache[key]
+                    del self.ttl_map[key]
+                except KeyError:
+                    pass  # Already deleted
                 return None
             return self.memory_cache.get(key)
         
         elif self.backend == 'redis' and self.redis_client:
             try:
                 value = self.redis_client.get(key)
-                if value:
-                    # Try to parse JSON
+                if value is None:
+                    return None
+                
+                # Try to decode and deserialize
+                try:
+                    decoded = value.decode('utf-8') if isinstance(value, bytes) else value
+                    # Try JSON deserialization
                     try:
-                        return json.loads(value.decode('utf-8'))
-                    except:
-                        return value.decode('utf-8')
+                        return json.loads(decoded)
+                    except json.JSONDecodeError:
+                        # Not JSON, return as string
+                        logger.debug(f"Cache key {key} is not valid JSON, returning as string")
+                        return decoded
+                except UnicodeDecodeError as e:
+                    logger.error(f"Failed to decode cache value for key {key}: {e}")
+                    return None
+                
             except Exception as e:
-                logger.error(f"Redis get failed: {e}")
+                logger.error(f"Redis get failed for key {key}: {e}")
+                return None
         
         return None
 
@@ -109,6 +139,10 @@ class CacheManager:
             data: OHLCV DataFrame
             ttl_minutes: Cache TTL
         """
+        if data is None or data.empty:
+            logger.debug(f"Cannot cache empty OHLCV for {symbol}/{timeframe}")
+            return
+        
         key = f"ohlcv:{symbol}:{timeframe}"
         # Convert DataFrame to dict for caching
         value = data.to_dict(orient='records')
@@ -116,7 +150,7 @@ class CacheManager:
 
     def get_ohlcv(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
         """
-        Get cached OHLCV data
+        Get cached OHLCV data with type validation - CORRECTED VERSION
         
         Args:
             symbol: Symbol
@@ -127,9 +161,37 @@ class CacheManager:
         """
         key = f"ohlcv:{symbol}:{timeframe}"
         value = self.get(key)
-        if value:
-            return pd.DataFrame(value)
-        return None
+        
+        if value is None:
+            return None
+        
+        try:
+            # Validate that value is a list of dicts
+            if not isinstance(value, list):
+                logger.warning(f"Cache key {key} has unexpected type: {type(value)}")
+                return None
+            
+            if len(value) == 0:
+                return pd.DataFrame()
+            
+            # Validate first element is dict-like
+            if not isinstance(value[0], dict):
+                logger.warning(f"Cache key {key} contains non-dict elements")
+                return None
+            
+            df = pd.DataFrame(value)
+            
+            # Validate required columns
+            required = ['Open', 'High', 'Low', 'Close', 'Volume']
+            if not all(col in df.columns for col in required):
+                logger.warning(f"Cached OHLCV for {symbol}/{timeframe} missing columns")
+                return None
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Failed to reconstruct OHLCV DataFrame for {key}: {e}")
+            return None
 
     def cache_indicators(self, symbol: str, indicators: Dict[str, float], ttl_minutes: int = 5):
         """
@@ -195,7 +257,8 @@ class CacheManager:
                     del self.memory_cache[key]
                 if key in self.ttl_map:
                     del self.ttl_map[key]
-            logger.info(f"Cleared {len(expired_keys)} expired cache entries")
+            if expired_keys:
+                logger.info(f"Cleared {len(expired_keys)} expired cache entries")
 
     def get_cache_stats(self) -> Dict:
         """
